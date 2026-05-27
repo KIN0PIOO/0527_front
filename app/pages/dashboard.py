@@ -15,9 +15,10 @@ from utils.db import (
     get_mig_logs,
 )
 
-_ROOT      = Path(__file__).resolve().parent.parent.parent
+_ROOT         = Path(__file__).resolve().parent.parent.parent
 load_dotenv(_ROOT / ".env")
-_CHATS_DIR = _ROOT / "runtime" / "chats"
+_CHATS_DIR    = _ROOT / "runtime" / "chats"
+_COMMAND_FILE = _ROOT / "runtime" / "chat_command.json"
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 CSS = """
@@ -130,6 +131,43 @@ def _fetch_map_context(map_ids: list[int]) -> str:
         lines.append(f"  (조회 오류: {e})")
     return "\n".join(lines)
 
+# ── 수퍼바이저 명령 전달 ──────────────────────────────────────────────────────
+def _write_supervisor_command(instruction: str) -> None:
+    _COMMAND_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _COMMAND_FILE.write_text(
+        json.dumps({"command": instruction, "requested_at": datetime.now().isoformat()},
+                   ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+_SUPERVISOR_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "send_supervisor_command",
+            "description": (
+                "수퍼바이저 에이전트에게 다음 사이클의 실행 방식을 지시합니다. "
+                "사용자가 특정 에이전트만 실행하거나, 특정 작업을 건너뛰거나, "
+                "특정 map_id 또는 row_id를 재실행하도록 요청할 때 사용하세요."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "instruction": {
+                        "type": "string",
+                        "description": "수퍼바이저 LLM에게 전달할 구체적인 한국어 지시문",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "사용자에게 보여줄 간단한 확인 메시지",
+                    },
+                },
+                "required": ["instruction", "summary"],
+            },
+        },
+    }
+]
+
 # ── LLM ───────────────────────────────────────────────────────────────────────
 def _system_prompt() -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -166,6 +204,16 @@ def _system_prompt() -> str:
     except Exception:
         pass
 
+    lines += [
+        "",
+        "[수퍼바이저 제어]",
+        "사용자가 아래와 같은 요청을 하면 send_supervisor_command 도구를 호출하세요.",
+        "- 특정 에이전트만 실행: 'SQL만 돌려줘', '마이그레이션 건너뛰어'",
+        "- 특정 job 재실행: 'map_id=5 다시 돌려줘', 'SQL row_id=xxx 재실행'",
+        "- 우선순위 변경: 'SQL 먼저 돌려줘'",
+        "instruction은 수퍼바이저 LLM이 직접 읽는 지시문이므로 구체적으로 작성하세요.",
+    ]
+
     return "\n".join(lines)
 
 def _call_llm(chat_messages: list[dict]) -> str:
@@ -174,7 +222,6 @@ def _call_llm(chat_messages: list[dict]) -> str:
     model    = os.getenv("LLM_MODEL", "gpt-4o-mini")
     client   = OpenAI(api_key=api_key, base_url=base_url)
 
-    # 마지막 유저 메시지에서 MAP_ID 감지 → DB 로그 컨텍스트 추가
     last_user = next(
         (m["content"] for m in reversed(chat_messages) if m["role"] == "user"), ""
     )
@@ -183,10 +230,29 @@ def _call_llm(chat_messages: list[dict]) -> str:
     system  = _system_prompt() + extra
 
     full_messages = [{"role": "system", "content": system}] + chat_messages
-    resp = client.chat.completions.create(
-        model=model, messages=full_messages, temperature=0.7, max_tokens=1500
-    )
-    return resp.choices[0].message.content.strip()
+
+    try:
+        resp = client.chat.completions.create(
+            model=model, messages=full_messages, temperature=0.7, max_tokens=1500,
+            tools=_SUPERVISOR_TOOLS, tool_choice="auto",
+        )
+        msg = resp.choices[0].message
+
+        if msg.tool_calls:
+            call = msg.tool_calls[0]
+            if call.function.name == "send_supervisor_command":
+                args = json.loads(call.function.arguments)
+                _write_supervisor_command(args["instruction"])
+                return f"✅ {args['summary']}\n\n수퍼바이저가 다음 사이클에 반영합니다."
+
+        return (msg.content or "").strip()
+
+    except Exception:
+        # tool use 미지원 모델 fallback
+        resp = client.chat.completions.create(
+            model=model, messages=full_messages, temperature=0.7, max_tokens=1500,
+        )
+        return resp.choices[0].message.content.strip()
 
 # ── 오른쪽 상태 패널 ───────────────────────────────────────────────────────────
 _ICON = {"PASS": "✅", "FAIL": "❌", "RUNNING": "🔄", "READY": "🔵",
