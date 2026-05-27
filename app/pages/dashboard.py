@@ -13,6 +13,9 @@ from utils.db import (
     get_recent_fails,
     get_mig_jobs,
     get_mig_logs,
+    reset_mig_job,
+    reset_sql_job,
+    reset_sql_tuning,
 )
 
 _ROOT         = Path(__file__).resolve().parent.parent.parent
@@ -144,11 +147,64 @@ _SUPERVISOR_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "reset_and_run_mig_job",
+            "description": (
+                "특정 map_id의 마이그레이션 작업을 재실행합니다. "
+                "DB에서 USE_YN=Y, STATUS=NULL, RETRY_COUNT=0으로 초기화한 뒤 "
+                "수퍼바이저에게 해당 map_id를 즉시 실행하도록 지시합니다."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "map_id": {"type": "integer", "description": "재실행할 MAP_ID"},
+                },
+                "required": ["map_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reset_and_run_sql_job",
+            "description": (
+                "특정 row_id의 SQL 변환 작업을 재실행합니다. "
+                "DB에서 STATUS=READY로 초기화한 뒤 수퍼바이저에게 즉시 실행하도록 지시합니다."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "row_id": {"type": "string", "description": "재실행할 SQL job의 ROW_ID"},
+                },
+                "required": ["row_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reset_and_run_sql_tuning",
+            "description": (
+                "특정 row_id의 SQL 튜닝을 재실행합니다. "
+                "DB에서 TUNED_SQL/TUNED_TEST를 초기화한 뒤 수퍼바이저에게 즉시 실행하도록 지시합니다. "
+                "STATUS=PASS인 row_id에만 적용됩니다."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "row_id": {"type": "string", "description": "재실행할 tuning job의 ROW_ID"},
+                },
+                "required": ["row_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "send_supervisor_command",
             "description": (
-                "수퍼바이저 에이전트에게 다음 사이클의 실행 방식을 지시합니다. "
-                "사용자가 특정 에이전트만 실행하거나, 특정 작업을 건너뛰거나, "
-                "특정 map_id 또는 row_id를 재실행하도록 요청할 때 사용하세요."
+                "수퍼바이저에게 실행 우선순위나 모드를 지시합니다. "
+                "특정 에이전트만 실행하거나 순서를 바꾸고 싶을 때 사용하세요. "
+                "예: 'mig만 돌려줘', 'SQL 먼저', 'tuning 건너뛰어'"
             ),
             "parameters": {
                 "type": "object",
@@ -165,7 +221,7 @@ _SUPERVISOR_TOOLS = [
                 "required": ["instruction", "summary"],
             },
         },
-    }
+    },
 ]
 
 # ── LLM ───────────────────────────────────────────────────────────────────────
@@ -206,12 +262,11 @@ def _system_prompt() -> str:
 
     lines += [
         "",
-        "[수퍼바이저 제어]",
-        "사용자가 아래와 같은 요청을 하면 send_supervisor_command 도구를 호출하세요.",
-        "- 특정 에이전트만 실행: 'SQL만 돌려줘', '마이그레이션 건너뛰어'",
-        "- 특정 job 재실행: 'map_id=5 다시 돌려줘', 'SQL row_id=xxx 재실행'",
-        "- 우선순위 변경: 'SQL 먼저 돌려줘'",
-        "instruction은 수퍼바이저 LLM이 직접 읽는 지시문이므로 구체적으로 작성하세요.",
+        "[수퍼바이저 제어 도구 사용 기준]",
+        "- map_id=X 재실행 요청 → reset_and_run_mig_job(map_id=X)",
+        "- SQL row_id=X 재실행 요청 → reset_and_run_sql_job(row_id=X)",
+        "- SQL 튜닝 row_id=X 재실행 요청 → reset_and_run_sql_tuning(row_id=X)",
+        "- 특정 에이전트만/먼저 실행 요청 ('mig만', 'sql 먼저' 등) → send_supervisor_command",
     ]
 
     return "\n".join(lines)
@@ -240,8 +295,43 @@ def _call_llm(chat_messages: list[dict]) -> str:
 
         if msg.tool_calls:
             call = msg.tool_calls[0]
-            if call.function.name == "send_supervisor_command":
-                args = json.loads(call.function.arguments)
+            args = json.loads(call.function.arguments)
+            name = call.function.name
+
+            if name == "reset_and_run_mig_job":
+                map_id = args["map_id"]
+                ok = reset_mig_job(map_id)
+                if not ok:
+                    return f"⚠️ map_id={map_id}를 찾을 수 없거나 초기화에 실패했습니다."
+                _write_supervisor_command(
+                    f"map_id={map_id}의 마이그레이션 작업이 재실행 대기 상태로 초기화되었습니다. "
+                    f"poll_jobs 후 run_data_migration([{map_id}])를 호출하세요."
+                )
+                return f"✅ map_id={map_id} 초기화 완료. 수퍼바이저가 다음 사이클에 실행합니다."
+
+            if name == "reset_and_run_sql_job":
+                row_id = args["row_id"]
+                ok = reset_sql_job(row_id)
+                if not ok:
+                    return f"⚠️ row_id={row_id}를 찾을 수 없거나 초기화에 실패했습니다."
+                _write_supervisor_command(
+                    f"row_id={row_id}의 SQL 변환 작업이 READY 상태로 초기화되었습니다. "
+                    f"poll_jobs 후 run_sql_conversion(['{row_id}'])를 호출하세요."
+                )
+                return f"✅ row_id={row_id} SQL 변환 초기화 완료. 수퍼바이저가 다음 사이클에 실행합니다."
+
+            if name == "reset_and_run_sql_tuning":
+                row_id = args["row_id"]
+                ok = reset_sql_tuning(row_id)
+                if not ok:
+                    return f"⚠️ row_id={row_id}를 찾을 수 없거나 STATUS=PASS가 아니어서 초기화할 수 없습니다."
+                _write_supervisor_command(
+                    f"row_id={row_id}의 SQL 튜닝이 초기화되었습니다. "
+                    f"poll_jobs 후 run_sql_tuning(['{row_id}'])를 호출하세요."
+                )
+                return f"✅ row_id={row_id} SQL 튜닝 초기화 완료. 수퍼바이저가 다음 사이클에 실행합니다."
+
+            if name == "send_supervisor_command":
                 _write_supervisor_command(args["instruction"])
                 return f"✅ {args['summary']}\n\n수퍼바이저가 다음 사이클에 반영합니다."
 

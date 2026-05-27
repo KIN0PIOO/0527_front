@@ -183,6 +183,67 @@ def get_sql_status_summary() -> dict[str, int]:
         return {}
 
 
+def reset_mig_job(map_id: int) -> bool:
+    """map_id를 재실행 가능 상태로 초기화 (USE_YN=Y, STATUS=NULL, RETRY_COUNT=0)."""
+    q = f"""
+        UPDATE {MIG_TABLE}
+        SET USE_YN = 'Y',
+            STATUS = NULL,
+            RETRY_COUNT = 0,
+            BATCH_CNT = 0,
+            UPD_TS = SYSDATE
+        WHERE MAP_ID = :1
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(q, (map_id,))
+            conn.commit()
+            return cur.rowcount > 0
+    except Exception:
+        return False
+
+
+def reset_sql_job(row_id: str) -> bool:
+    """SQL 변환 job을 READY 상태로 초기화."""
+    q = f"""
+        UPDATE {SQL_TABLE}
+        SET STATUS = 'READY',
+            BATCH_CNT = 0,
+            LOG = NULL,
+            UPD_TS = SYSDATE
+        WHERE ROWIDTOCHAR(ROWID) = :1
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(q, (row_id,))
+            conn.commit()
+            return cur.rowcount > 0
+    except Exception:
+        return False
+
+
+def reset_sql_tuning(row_id: str) -> bool:
+    """SQL 튜닝 결과를 초기화하여 재실행 대상으로 만든다 (STATUS=PASS 인 경우만)."""
+    q = f"""
+        UPDATE {SQL_TABLE}
+        SET TUNED_SQL = NULL,
+            TUNED_TEST = NULL,
+            UPD_TS = SYSDATE
+        WHERE ROWIDTOCHAR(ROWID) = :1
+          AND UPPER(TRIM(STATUS)) = 'PASS'
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(q, (row_id,))
+            conn.commit()
+            return cur.rowcount > 0
+    except Exception:
+        return False
+
+
 def get_sql_job_full(row_id: str) -> dict | None:
     q = f"""
         SELECT ROWIDTOCHAR(ROWID) AS ROW_ID,

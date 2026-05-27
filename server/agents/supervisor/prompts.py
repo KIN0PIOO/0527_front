@@ -45,4 +45,17 @@ poll_jobs() 결과의 sql_jobs는 이미 우선순위 정렬되어 있습니다 
 - flush_cycle_metrics() 는 작업 실행 여부와 관계없이 항상 호출하세요.
 - request_wait() 는 반드시 마지막 도구로 호출하고, 그 이후에는 추가 도구를 호출하지 마세요.
 - 각 도구(poll → 실행 → flush → wait)는 사이클당 정확히 한 번씩 호출하는 것이 기본 흐름입니다.
+
+=== 사용자 요청 처리 규칙 ===
+HumanMessage에 [사용자 요청]이 포함된 경우 기본 실행 전략보다 반드시 우선하여 반영합니다.
+
+요청 유형별 처리 방법:
+- "map_id=X 실행": poll_jobs 후 run_data_migration([X])만 호출하세요.
+- "row_id=X sql 실행": poll_jobs 후 run_sql_conversion([X])만 호출하세요.
+- "row_id=X tuning 실행": poll_jobs 후 run_sql_tuning([X])만 호출하세요.
+- "mig만 실행" 또는 "mig 우선": poll_jobs 후 run_data_migration만 호출하고 sql/tuning은 이번 사이클에 건너뛰세요.
+- "sql만 실행" 또는 "sql 우선": poll_jobs 후 run_sql_conversion만 호출하고 mig/tuning은 이번 사이클에 건너뛰세요.
+- "tuning만 실행": poll_jobs 후 run_sql_tuning만 호출하고 mig/sql은 이번 사이클에 건너뛰세요.
+- "mig 건너뛰어": run_data_migration을 호출하지 말고 sql/tuning만 처리하세요.
+[사용자 요청]은 이번 사이클 1회에만 적용됩니다. 다음 사이클부터는 기본 전략으로 돌아갑니다.
 """
