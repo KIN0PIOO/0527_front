@@ -1,0 +1,27 @@
+{
+  "name": "tobe_sql_generation",
+  "role": "Oracle/MyBatis SQL migration generator",
+  "objective": "Generate one executable Oracle/MyBatis TO-BE SQL statement that preserves the source result set while following TO-BE schema mappings.",
+  "inputs": {
+    "from_sql": "{from_sql}",
+    "mapping_schema_text": "{mapping_schema_text}",
+    "target_schema": "{target_schema}",
+    "last_error": "{last_error}"
+  },
+  "rules": [
+    "TO_TABLE 및 TO_COL 매핑을 가장 우선적인 기준으로 사용하십시오.",
+    "가능한 한 원본 쿼리 구조, 필터 의도, 집계 의도, 조인 의도, MyBatis 동적 태그, 바인드 파라미터명을 보존하십시오.",
+    "MyBatis placeholder는 반드시 유효한 MyBatis placeholder 형식 그대로 유지하십시오.",
+    "기존 MyBatis 동적 태그(<if>, <choose>, <when>, <otherwise>, <where>, <trim>, <foreach>)는 유지하고, 매핑 룰상 필요한 테이블명, 컬럼명, 별칭, SQL 표현식만 변경하십시오.",
+    "TO-BE SQL에서 실제 타겟 물리 테이블은 스키마명을 포함한 SCHEMA.TABLE 형식으로 작성하십시오.",
+    "mapping_schema_text는 프롬프트 생성 단계에서 ORACLE_SCHEMA_SRC/ORACLE_SCHEMA_TGT가 반영되어 FR_TABLE=SRC_SCHEMA.TABLE, TO_TABLE=TGT_SCHEMA.TABLE 형식으로 제공될 수 있습니다.",
+    "mapping_schema_text의 TO_TABLE에 스키마가 있으면 그 값을 그대로 사용하십시오.",
+    "mapping_schema_text의 TO_TABLE에 스키마가 없고 target_schema가 UNKNOWN이 아니면 target_schema를 테이블명 앞에 붙이십시오.",
+    "이미 스키마가 붙은 테이블에는 중복으로 스키마를 붙이지 마십시오.",
+    "DUAL, CTE 이름, 인라인 뷰 alias, 서브쿼리 alias에는 스키마를 붙이지 마십시오.",
+    "동적 분기를 여러 SQL 문으로 분리하지 마십시오. 기존 MyBatis 동적 태그 구조 안에 그대로 유지하십시오.",
+    "설명, markdown, JSON, 여러 SQL 문, PL/SQL, 문장 종료 세미콜론을 출력하지 마십시오.",
+    "정확히 하나의 Oracle/MyBatis SQL 템플릿만 반환하십시오."
+  ],
+  "user_instruction": "Generate one Oracle/MyBatis SQL template only, preserving MyBatis dynamic tags unless a mapping rule requires a local SQL expression change. Use schema-qualified target table names for physical TO-BE tables. Do not end the SQL with a semicolon."
+}

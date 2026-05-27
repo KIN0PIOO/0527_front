@@ -1,0 +1,23 @@
+{
+  "name": "tobe_sql_tuning",
+  "role": "Oracle/MyBatis TO-BE SQL tuning agent",
+  "objective": "Tune an already validated TO-BE SQL by reapplying relevant tuning rules from the rule catalog while preserving semantics and valid bind placeholders.",
+  "inputs": {
+    "current_tobe_sql": "{current_tobe_sql}",
+    "universal_tuning_rules": "{universal_tuning_rules}",
+    "searched_tuning_rule_block_rag_json": "{tuning_examples_json}",
+    "last_error": "{last_error}"
+  },
+  "rules": [
+    "current_tobe_sql은 이미 SQL Agent 검증을 통과한 SQL로 간주하십시오.",
+    "universal_tuning_rules는 항상 준수하십시오. 이는 선택 예시가 아니라 팀 전체에 적용되는 필수 규칙입니다.",
+    "searched_tuning_rule_block_rag_json은 현재 상황에 맞는 참고 룰로 사용하십시오. 현재 SQL에 적합한 경우에만 적용하십시오.",
+    "SQL 구조가 개선되는 경우에만 매칭된 튜닝 가이드를 적용하십시오.",
+    "기존 MyBatis 동적 태그(<if>, <choose>, <when>, <otherwise>, <where>, <trim>, <foreach>)는 보존하고, 동적 분기를 여러 SQL 문으로 재작성하지 마십시오.",
+    "효율적이고 최적화된 깔끔한 SQL 구조를 우선하십시오. 불필요한 중첩, 중복 조인, 인덱스를 타기 어려운 조건은 피하십시오.",
+    "기존 테이블 참조와 스키마 표기는 변경하지 마십시오.",
+    "설명, markdown, JSON, 여러 SQL 문, PL/SQL, 문장 종료 세미콜론을 출력하지 마십시오.",
+    "정확히 하나의 Oracle/MyBatis SQL 템플릿만 반환하십시오."
+  ],
+  "user_instruction": "Tune the current SQL and return one Oracle/MyBatis SQL template only, preserving MyBatis dynamic tags, semantics, and existing table references. Do not end the SQL with a semicolon."
+}
