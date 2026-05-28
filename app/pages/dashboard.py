@@ -17,6 +17,7 @@ from utils.db import (
     reset_sql_job,
     reset_sql_tuning,
 )
+from utils.agent_control import get_status as get_agent_status, start as start_agent
 
 _ROOT         = Path(__file__).resolve().parent.parent.parent
 load_dotenv(_ROOT / ".env")
@@ -135,13 +136,26 @@ def _fetch_map_context(map_ids: list[int]) -> str:
     return "\n".join(lines)
 
 # ── 수퍼바이저 명령 전달 ──────────────────────────────────────────────────────
-def _write_supervisor_command(instruction: str) -> None:
+def _write_supervisor_command(instruction: str, one_shot: bool = False) -> None:
     _COMMAND_FILE.parent.mkdir(parents=True, exist_ok=True)
     _COMMAND_FILE.write_text(
-        json.dumps({"command": instruction, "requested_at": datetime.now().isoformat()},
-                   ensure_ascii=False),
+        json.dumps({
+            "command": instruction,
+            "one_shot": one_shot,
+            "requested_at": datetime.now().isoformat(),
+        }, ensure_ascii=False),
         encoding="utf-8",
     )
+
+
+def _ensure_agent_running(one_shot: bool) -> str:
+    """에이전트가 꺼져있으면 자동 시작. one_shot 여부에 따라 안내 문구 반환."""
+    if not get_agent_status()["running"]:
+        start_agent()
+        if one_shot:
+            return "\n에이전트를 자동 시작했습니다. 해당 작업만 처리 후 자동 종료됩니다."
+        return "\n에이전트를 자동 시작했습니다."
+    return ""
 
 _SUPERVISOR_TOOLS = [
     {
@@ -305,9 +319,11 @@ def _call_llm(chat_messages: list[dict]) -> str:
                     return f"⚠️ map_id={map_id}를 찾을 수 없거나 초기화에 실패했습니다."
                 _write_supervisor_command(
                     f"map_id={map_id}의 마이그레이션 작업이 재실행 대기 상태로 초기화되었습니다. "
-                    f"poll_jobs 후 run_data_migration([{map_id}])를 호출하세요."
+                    f"poll_jobs 후 run_data_migration([{map_id}])를 호출하세요.",
+                    one_shot=True,
                 )
-                return f"✅ map_id={map_id} 초기화 완료. 수퍼바이저가 다음 사이클에 실행합니다."
+                hint = _ensure_agent_running(one_shot=True)
+                return f"✅ map_id={map_id} 초기화 완료. 해당 작업만 실행 후 자동 종료됩니다.{hint}"
 
             if name == "reset_and_run_sql_job":
                 row_id = args["row_id"]
@@ -316,9 +332,11 @@ def _call_llm(chat_messages: list[dict]) -> str:
                     return f"⚠️ row_id={row_id}를 찾을 수 없거나 초기화에 실패했습니다."
                 _write_supervisor_command(
                     f"row_id={row_id}의 SQL 변환 작업이 READY 상태로 초기화되었습니다. "
-                    f"poll_jobs 후 run_sql_conversion(['{row_id}'])를 호출하세요."
+                    f"poll_jobs 후 run_sql_conversion(['{row_id}'])를 호출하세요.",
+                    one_shot=True,
                 )
-                return f"✅ row_id={row_id} SQL 변환 초기화 완료. 수퍼바이저가 다음 사이클에 실행합니다."
+                hint = _ensure_agent_running(one_shot=True)
+                return f"✅ row_id={row_id} SQL 변환 초기화 완료. 해당 작업만 실행 후 자동 종료됩니다.{hint}"
 
             if name == "reset_and_run_sql_tuning":
                 row_id = args["row_id"]
@@ -327,13 +345,16 @@ def _call_llm(chat_messages: list[dict]) -> str:
                     return f"⚠️ row_id={row_id}를 찾을 수 없거나 STATUS=PASS가 아니어서 초기화할 수 없습니다."
                 _write_supervisor_command(
                     f"row_id={row_id}의 SQL 튜닝이 초기화되었습니다. "
-                    f"poll_jobs 후 run_sql_tuning(['{row_id}'])를 호출하세요."
+                    f"poll_jobs 후 run_sql_tuning(['{row_id}'])를 호출하세요.",
+                    one_shot=True,
                 )
-                return f"✅ row_id={row_id} SQL 튜닝 초기화 완료. 수퍼바이저가 다음 사이클에 실행합니다."
+                hint = _ensure_agent_running(one_shot=True)
+                return f"✅ row_id={row_id} SQL 튜닝 초기화 완료. 해당 작업만 실행 후 자동 종료됩니다.{hint}"
 
             if name == "send_supervisor_command":
-                _write_supervisor_command(args["instruction"])
-                return f"✅ {args['summary']}\n\n수퍼바이저가 다음 사이클에 반영합니다."
+                _write_supervisor_command(args["instruction"], one_shot=False)
+                hint = _ensure_agent_running(one_shot=False)
+                return f"✅ {args['summary']}\n\n수퍼바이저가 다음 사이클에 반영합니다.{hint}"
 
         return (msg.content or "").strip()
 

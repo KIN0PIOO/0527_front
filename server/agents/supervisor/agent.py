@@ -30,16 +30,18 @@ from server.tools.context import is_stop_requested, request_stop
 _COMMAND_FILE = Path(__file__).resolve().parent.parent.parent.parent / "runtime" / "chat_command.json"
 
 
-def _read_chat_command() -> str | None:
-    """채팅에서 전달된 수퍼바이저 명령을 읽고 파일을 삭제한다 (1회성)."""
+def _read_chat_command() -> tuple[str | None, bool]:
+    """채팅에서 전달된 수퍼바이저 명령을 읽고 파일을 삭제한다 (1회성).
+    Returns: (command, one_shot)
+    """
     if not _COMMAND_FILE.exists():
-        return None
+        return None, False
     try:
         data = json.loads(_COMMAND_FILE.read_text(encoding="utf-8"))
         _COMMAND_FILE.unlink(missing_ok=True)
-        return data.get("command")
+        return data.get("command"), data.get("one_shot", False)
     except Exception:
-        return None
+        return None, False
 
 logger = logging.getLogger("migration_agent")
 
@@ -106,10 +108,10 @@ class SupervisorAgent:
                     f"사이클 {cycle}을 시작합니다. "
                     "poll_jobs()를 호출하여 현황을 파악하고 작업을 처리하세요."
                 )
-                chat_command = _read_chat_command()
+                chat_command, one_shot = _read_chat_command()
                 if chat_command:
                     human_content += f"\n\n[사용자 요청] {chat_command}\n위 요청을 이번 사이클에 반영하세요."
-                    logger.info(f"[Supervisor] 채팅 명령 수신: {chat_command}")
+                    logger.info(f"[Supervisor] 채팅 명령 수신 (one_shot={one_shot}): {chat_command}")
 
                 initial_state: SupervisorState = {
                     "messages": [
@@ -135,6 +137,10 @@ class SupervisorAgent:
                 finally:
                     # LLM이 flush_cycle_metrics 호출을 누락한 경우를 대비한 안전망
                     supervisor_tools.finish_cycle_metrics(logger)
+
+                if one_shot:
+                    logger.info("[Supervisor] one_shot 사이클 완료. 자동 종료합니다.")
+                    break
 
         finally:
             logger.info("[Supervisor] 모든 에이전트가 종료되었습니다.")
